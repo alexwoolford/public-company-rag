@@ -53,11 +53,11 @@ class RAGChat:
         Ask a question and generate an answer with conversation history.
 
         Returns:
-            dict with 'answer', 'chunks', and 'companies_mentioned'
+            dict with 'answer', 'chunks', 'companies_mentioned', and 'timing'
         """
-        # Retrieve relevant chunks
+        # Retrieve relevant chunks (returns chunks and timing)
         if self.company_cik:
-            chunks = query_by_company(
+            chunks, search_timing = query_by_company(
                 self.client,
                 self.namespace_name,
                 self.company_cik,
@@ -65,15 +65,15 @@ class RAGChat:
                 top_k=self.top_k,
             )
         else:
-            chunks = semantic_search(
+            chunks, search_timing = semantic_search(
                 self.client,
                 self.namespace_name,
                 question,
                 top_k=self.top_k,
             )
 
-        # Generate answer with conversation history
-        answer = self._generate_answer_with_history(question, chunks)
+        # Generate answer with conversation history (returns answer and timing)
+        answer, generation_time = self._generate_answer_with_history(question, chunks)
 
         # Extract companies mentioned
         companies_mentioned = list({
@@ -88,14 +88,24 @@ class RAGChat:
             "answer": answer,
         })
 
+        # Combine timing info
+        timing = {
+            "embedding": search_timing["embedding"],
+            "search": search_timing["search"],
+            "generation": generation_time,
+            "total": search_timing["embedding"] + search_timing["search"] + generation_time,
+        }
+
         return {
             "answer": answer,
             "chunks": chunks,
             "companies_mentioned": companies_mentioned,
+            "timing": timing,
         }
 
-    def _generate_answer_with_history(self, question: str, chunks: list[dict]) -> str:
+    def _generate_answer_with_history(self, question: str, chunks: list[dict]) -> tuple[str, float]:
         """Generate answer considering conversation history."""
+        import time
         from openai import OpenAI
         from public_company_rag.config import get_settings
 
@@ -103,7 +113,7 @@ class RAGChat:
         client = OpenAI(api_key=settings.openai_api_key)
 
         if not chunks:
-            return "No relevant information found to answer the question."
+            return "No relevant information found to answer the question.", 0.0
 
         # Format context from chunks
         context_parts = []
@@ -141,14 +151,16 @@ Please provide a clear answer based on the context above. Include citations usin
 
         messages.append({"role": "user", "content": user_prompt})
 
-        # Generate answer
+        # Generate answer (timed)
+        generation_start = time.time()
         response = client.chat.completions.create(
             model=settings.llm_model,
             messages=messages,
             temperature=0.3,
         )
+        generation_time = time.time() - generation_start
 
-        return response.choices[0].message.content
+        return response.choices[0].message.content, generation_time
 
 
 def main():
@@ -247,14 +259,21 @@ def main():
                     continue
 
                 print()
-                print("Searching with Turbopuffer RAG...")
 
                 # Ask question
                 response = chat.ask(question)
 
-                print(f"Retrieved: {len(response['chunks'])} chunks")
-                if response['companies_mentioned']:
-                    print(f"Companies: {', '.join(response['companies_mentioned'][:5])}")
+                # Display timing breakdown (compact, one line)
+                timing = response['timing']
+                print(f"Timing: {timing['embedding']:.2f}s embed + {timing['search']:.2f}s search + {timing['generation']:.2f}s generation = {timing['total']:.2f}s total")
+
+                # Display company summary
+                num_companies = len(response['companies_mentioned'])
+                if num_companies > 0:
+                    company_list = ', '.join(response['companies_mentioned'])
+                    print(f"Found {num_companies} companies in {len(response['chunks'])} chunks: {company_list}")
+                else:
+                    print(f"Searched {len(response['chunks'])} chunks")
                 print()
 
                 print("=" * 80)

@@ -61,10 +61,12 @@ def test_semantic_search(client: Turbopuffer, namespace_name: str) -> None:
         logger.info(f"Query: {query}")
 
         start_time = time.time()
-        chunks = semantic_search(client, namespace_name, query, top_k=5)
+        chunks, timing = semantic_search(client, namespace_name, query, top_k=5)
         duration = time.time() - start_time
 
         logger.info(f"Found {len(chunks)} results in {duration:.3f}s")
+        logger.info(f"  Embedding: {timing['embedding']:.3f}s")
+        logger.info(f"  Vector search: {timing['search']:.3f}s")
 
         if chunks:
             # Show top result
@@ -91,10 +93,12 @@ def test_company_query(client: Turbopuffer, namespace_name: str) -> None:
     logger.info(f"Filter: CIK = {apple_cik}")
 
     start_time = time.time()
-    chunks = query_by_company(client, namespace_name, apple_cik, query, top_k=5)
+    chunks, timing = query_by_company(client, namespace_name, apple_cik, query, top_k=5)
     duration = time.time() - start_time
 
     logger.info(f"Found {len(chunks)} results in {duration:.3f}s")
+    logger.info(f"  Embedding: {timing['embedding']:.3f}s")
+    logger.info(f"  Vector search (filtered): {timing['search']:.3f}s")
 
     if chunks:
         for i, chunk in enumerate(chunks[:3], 1):
@@ -115,21 +119,26 @@ def test_answer_generation(client: Turbopuffer, namespace_name: str) -> None:
     # Retrieve context
     logger.info("Retrieving context...")
     apple_cik = "0000320193"
-    chunks = query_by_company(client, namespace_name, apple_cik, question, top_k=5)
+    chunks, search_timing = query_by_company(client, namespace_name, apple_cik, question, top_k=5)
 
     if not chunks:
         logger.warning("No chunks found for context")
         return
 
     logger.info(f"Using {len(chunks)} chunks as context")
+    logger.info(f"  Embedding: {search_timing['embedding']:.3f}s")
+    logger.info(f"  Vector search: {search_timing['search']:.3f}s")
 
     # Generate answer
     logger.info("Generating answer...")
     start_time = time.time()
-    answer = generate_answer(question, chunks, include_citations=True)
+    answer, generation_time = generate_answer(question, chunks, include_citations=True)
     duration = time.time() - start_time
 
-    logger.info(f"\nAnswer (generated in {duration:.1f}s):")
+    logger.info(f"\nTiming breakdown:")
+    logger.info(f"  Answer generation: {generation_time:.3f}s")
+    logger.info(f"  Total: {duration:.3f}s")
+    logger.info(f"\nAnswer:")
     logger.info(f"\n{answer}\n")
 
     print_separator()
@@ -146,15 +155,22 @@ def test_performance(client: Turbopuffer, namespace_name: str) -> None:
     logger.info(f"Query: {query}")
 
     durations = []
+    embedding_times = []
+    search_times = []
+
     for i in range(num_runs):
         start_time = time.time()
-        chunks = semantic_search(client, namespace_name, query, top_k=10)
+        chunks, timing = semantic_search(client, namespace_name, query, top_k=10)
         duration = time.time() - start_time
         durations.append(duration)
-        logger.info(f"  Run {i+1}: {duration:.3f}s ({len(chunks)} results)")
+        embedding_times.append(timing['embedding'])
+        search_times.append(timing['search'])
+        logger.info(f"  Run {i+1}: {duration:.3f}s (embed: {timing['embedding']:.3f}s, search: {timing['search']:.3f}s, {len(chunks)} results)")
 
-    avg_duration = sum(durations) / len(durations)
-    logger.info(f"\nAverage query time: {avg_duration:.3f}s")
+    logger.info(f"\nAverage times:")
+    logger.info(f"  Embedding: {sum(embedding_times)/len(embedding_times):.3f}s")
+    logger.info(f"  Vector search: {sum(search_times)/len(search_times):.3f}s")
+    logger.info(f"  Total: {sum(durations)/len(durations):.3f}s")
     logger.info(f"Min: {min(durations):.3f}s, Max: {max(durations):.3f}s")
 
     print_separator()

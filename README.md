@@ -57,10 +57,10 @@ shortage could significantly impact their business activities.
 ```
 
 **What makes this powerful:**
-- Query across 2.85M chunks from SEC 10-K filings (2024-2025)
-- Semantic search finds relevant companies even if they don't explicitly mention "helium shortage"
-- AI generates comprehensive answers with source citations
-- Sub-3 second response time for complex queries
+- **Fast vector search**: Turbopuffer retrieves relevant chunks from 2.85M vectors in <1 second
+- **Semantic understanding**: Finds companies impacted by helium shortages even when they describe it as "critical gas supply" or "specialty industrial gases"
+- **Comprehensive coverage**: 5,410 public companies, spanning all industries
+- **Accurate citations**: Every claim traces back to specific 10-K filing sections
 
 ## Quick Start
 

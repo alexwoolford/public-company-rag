@@ -6,6 +6,7 @@ and company-specific queries using the Turbopuffer vector database.
 """
 
 import logging
+import time
 from typing import Any
 
 from openai import OpenAI
@@ -16,7 +17,7 @@ from public_company_rag.config import get_settings
 logger = logging.getLogger(__name__)
 
 
-def create_query_embedding(text: str) -> list[float]:
+def create_query_embedding(text: str) -> tuple[list[float], float]:
     """
     Create embedding for query text using OpenAI.
 
@@ -24,17 +25,19 @@ def create_query_embedding(text: str) -> list[float]:
         text: Query text to embed
 
     Returns:
-        Embedding vector (1536 dimensions)
+        Tuple of (embedding vector, time taken in seconds)
     """
     settings = get_settings()
     client = OpenAI(api_key=settings.openai_api_key)
 
+    start_time = time.time()
     response = client.embeddings.create(
         model=settings.embedding_model,
         input=text,
     )
+    embedding_time = time.time() - start_time
 
-    return response.data[0].embedding
+    return response.data[0].embedding, embedding_time
 
 
 def semantic_search(
@@ -43,7 +46,7 @@ def semantic_search(
     query_text: str,
     top_k: int | None = None,
     filters: tuple | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """
     Perform semantic search on chunks.
 
@@ -55,14 +58,14 @@ def semantic_search(
         filters: Optional Turbopuffer filter tuple (e.g., ("company_cik", "Eq", "0000320193"))
 
     Returns:
-        List of matched chunks with similarity scores and metadata
+        Tuple of (list of matched chunks, timing dict with 'embedding' and 'search' in seconds)
     """
     settings = get_settings()
     top_k = top_k or settings.default_top_k
 
-    # Create query embedding
+    # Create query embedding (timed)
     logger.debug(f"Creating embedding for query: {query_text[:100]}...")
-    query_vector = create_query_embedding(query_text)
+    query_vector, embedding_time = create_query_embedding(query_text)
 
     # Get namespace resource
     namespace = client.namespace(namespace_name)
@@ -70,14 +73,16 @@ def semantic_search(
     # Build rank_by parameter for vector search
     rank_by = ("vector", "ANN", query_vector)
 
-    # Query Turbopuffer
+    # Query Turbopuffer (timed)
     logger.debug(f"Querying Turbopuffer (top_k={top_k}, filters={filters})")
+    search_start = time.time()
     response = namespace.query(
         rank_by=rank_by,
         top_k=top_k,
         filters=filters,
         include_attributes=True,
     )
+    search_time = time.time() - search_start
 
     # Transform results to consistent format
     chunks = []
@@ -99,8 +104,13 @@ def semantic_search(
             }
         )
 
-    logger.info(f"Found {len(chunks)} matching chunks")
-    return chunks
+    timing = {
+        "embedding": embedding_time,
+        "search": search_time,
+    }
+
+    logger.info(f"Found {len(chunks)} matching chunks (embedding: {embedding_time:.3f}s, search: {search_time:.3f}s)")
+    return chunks, timing
 
 
 def query_by_company(
@@ -109,7 +119,7 @@ def query_by_company(
     cik: str,
     query_text: str,
     top_k: int | None = None,
-) -> list[dict[str, Any]]:
+) -> tuple[list[dict[str, Any]], dict[str, float]]:
     """
     Semantic search filtered by company CIK.
 
@@ -121,7 +131,7 @@ def query_by_company(
         top_k: Number of results to return
 
     Returns:
-        List of matched chunks from the specified company
+        Tuple of (list of matched chunks, timing dict)
     """
     # Turbopuffer filter format: (attribute, operator, value)
     filters = ("company_cik", "Eq", cik)
@@ -133,7 +143,7 @@ def generate_answer(
     context_chunks: list[dict[str, Any]],
     model: str | None = None,
     include_citations: bool = True,
-) -> str:
+) -> tuple[str, float]:
     """
     Generate an answer to a question using retrieved chunks as context.
 
@@ -144,14 +154,14 @@ def generate_answer(
         include_citations: If True, include chunk IDs as citations
 
     Returns:
-        Generated answer string
+        Tuple of (generated answer string, generation time in seconds)
     """
     settings = get_settings()
     model = model or settings.llm_model
     client = OpenAI(api_key=settings.openai_api_key)
 
     if not context_chunks:
-        return "No relevant information found to answer the question."
+        return "No relevant information found to answer the question.", 0.0
 
     # Format context from chunks
     context_parts = []
@@ -181,8 +191,9 @@ Please provide a clear answer based on the context above."""
     if include_citations:
         user_prompt += " Include citations using [N] notation where appropriate."
 
-    # Generate answer
+    # Generate answer (timed)
     logger.debug(f"Generating answer with {model} (context: {len(context_chunks)} chunks)")
+    generation_start = time.time()
     response = client.chat.completions.create(
         model=model,
         messages=[
@@ -191,11 +202,12 @@ Please provide a clear answer based on the context above."""
         ],
         temperature=0.3,  # Lower temperature for more factual responses
     )
+    generation_time = time.time() - generation_start
 
     answer = response.choices[0].message.content
 
-    logger.info(f"Generated answer ({len(answer)} chars)")
-    return answer
+    logger.info(f"Generated answer ({len(answer)} chars, {generation_time:.3f}s)")
+    return answer, generation_time
 
 
 def get_stats(client: Turbopuffer, namespace_name: str) -> dict[str, Any]:
